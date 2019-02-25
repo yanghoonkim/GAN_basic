@@ -4,116 +4,77 @@ sys.path.append('submodule/')
 import numpy as np
 import tensorflow as tf
 
+import generator_impl, discriminator_impl
 
-def model_name(features, labels, mode, params):
-    hidden_size = params['hidden_size']
-    voca_size = params['voca_size']
-    bucket_sizes = params['bucket_sizes']
+
+def gan(features, labels, mode, params):
+    dtype = params['dtype']
     
-    
-    def embed_op(inputs, params):
-        if params['embedding'] == None:
-            embedding = tf.get_variable('embedding', [params['voca_size'], params['hidden_size']], dtype = params['dtype'])
-        else:
-            glove = np.load(params['embedding'])
-            embedding = tf.Variable(glove, trainable = params['embedding_trainable'], name = 'embedding', dtype = tf.float32)
+    g_hidden_size = params['hidden_size']
+    g_output_size = params['output_size']
+    g_hidden_activation = params['g_hidden_activation']
+    g_output_activation = parmas['g_output_activation']
+    z_size = params['z_size']
 
-        tf.summary.histogram(embedding.name + '/value', embedding)
-        return tf.nn.embedding_lookup(embedding, inputs)
+    d_hidden_size = params['d_hidden_size']
+    d_output_size = params['d_output_size']
+    d_hidden_activation = params['d_hidden_activation']
+    d_output_activation = params['d_output_activation']
 
-    def conv_op(embd_inp, params):
-        fltr = tf.get_variable(
-                'conv_fltr', 
-                params['kernel'], 
-                params['dtype'], 
-                regularizer = tf.contrib.layers.l2_regularizer(1.0)
-                )
+    batch_size = params['batch_size']
 
-        convout = tf.nn.conv1d(embd_inp, fltr, params['stride'], params['conv_pad'])
-        return convout
 
-    def ffn_op(x, params):
-        out = x
-        if params['ffn_size'] == None:
-            ffn_size = []
-        else:
-            ffn_size = params['ffn_size']
-        for unit_size in ffn_size[:-1]:
-            out = tf.layers.dense(
-                    out, 
-                    unit_size, 
-                    activation = tf.tanh, 
-                    use_bias = True, 
-                    kernel_regularizer = tf.contrib.layers.l2_regularizer(1.0)
-                    )
-        return tf.layers.dense(
-                out, 
-                params['label_size'], 
-                activation = None, 
-                use_bias = True, 
-                kernel_regularizer = tf.contrib.layers.l2_regularizer(1.0)
-                )
+    # Sample z and generate synthetic data
+    with tf.variable_scope('GeneratorScope'):
+        z = tf.random.uniform([batch_size, z_size], dtype = dtype, name = 'z')
+        generator = generator_impl.Generator(g_hidden_size, g_output_size, g_hidden_activation, g_output_activation)
 
-    inputs = features['x']
-    
-    # raw input to embedded input of shape [batch, length, hidden_size]
-    embd_inp = embed_op(inputs, params)
-    if params['hidden_size'] != embd_inp.get_shape().as_list()[-1]:
-        x = tf.layers.dense(
-                embd_inp, 
-                params['hidden_size'], 
-                activation = None, 
-                use_bias = False, 
-                kernel_regularizer = tf.contrib.layers.l2_regularizer(1.0)
-                )
-    else:
-        x = embd_inp
+        g_out = generator(z)
 
-    # attention bias computation
-    padding = ca.embedding_to_padding(x)
-    self_attention_bias = ca.attention_bias_ignore_padding(padding)
+    # Sample real data discriminate
+    with tf.variable_scope('DiscriminatorScope'):
+        x = features['x']
+        discriminator = discriminator_impl.Discriminator(d_hidden_size, d_output_size, d_hidden_activation, d_output_actication)
+        d_out =  discriminator(x)
 
     
-    logits = vector
-    # predictions, loss and eval_metric
-    predictions = tf.argmax(softmax_out, axis = -1)
-    if mode == tf.estimator.ModeKeys.PREDICT:
-        return tf.estimator.EstimatorSpec(
-                mode = mode,
-                predictions = {'sentiment' : predictions})
-    labels = tf.cast(labels, tf.int32)
-    labels = tf.one_hot(labels, params['label_size'])
+    # Predict mode
 
-    loss_ce = tf.losses.softmax_cross_entropy(onehot_labels = labels, logits = logits)
+    # Train mode
+    # Prediction of discriminator
+    prediction_real = tf.round(d_out)
+    prediction_syn = tf.round(discriminator(g_out))
+
+    # Define loss function for generator and discriminator
+    loss_g = -tf.reduce_mean(tf.log(g_out))
+    loss_d = -tf.reduce_mean(tf.log(d_out) + tf.log(1 - discriminator(g_out)))
+
     eval_metric_ops = {
-                'accuracy' : tf.metrics.accuracy(tf.argmax(labels, -1), predictions = predictions),
-                'pearson_all' : tf.contrib.metrics.streaming_pearson_correlation(softmax_out, tf.cast(labels, tf.float32)),
-                'pearson_some' : tf.contrib.metrics.streaming_pearson_correlation(tf.cast(predictions, tf.float32), tf.cast(tf.argmax(labels, -1), tf.float32))
-                }
+            'accuracy_real': tf.metrics.accuracy(tf.ones([batch_size, 1]), predictions = prediction_real),
+            'accuracy_syn': tf.metrics.accuracy(tf.zeros([batch_size, 1]), prediction_syn)
+            }
 
-    # regularizaiton loss
-    loss_reg = sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-    reg_const = params['regularization']  # Choose an appropriate one.
-    
-    loss = loss_ce + reg_const * loss_reg
 
-    tf.summary.scalar('loss_ce', loss_ce)
-    tf.summary.scalar('loss_reg', loss_reg)
-    tf.summary.scalar('loss', loss)
+    tf.summary.scalar('loss_g', loss_g)
+    tf.summary.scalar('loss_d', loss_d)
     
-    #optimizer = tf.train.GradientDescentOptimizer(learning_rate=params["learning_rate"])
     learning_rate = params['learning_rate']
-    learning_rate = tf.train.exponential_decay(learning_rate, tf.train.get_global_step(), 500, params['decay'], staircase = True)
-    optimizer = tf.train.AdamOptimizer(learning_rate)
-    #optimizer = tf.train.AdamOptimizer()
+    learning_rate = tf.train.exponential_decay(learning_rate, tf.train.get_global_step(), 500, params['decay_step'], staircase = True)
+    optimizer_g = tf.train.AdamOptimizer(learning_rate)
+    optimizer_d = tf.train.AdamOptimizer(learning_rate)
 
-    #train_op = optimizer.minimize(
-        #loss=loss, global_step=tf.train.get_global_step())
-    grad_and_var = optimizer.compute_gradients(loss, tf.trainable_variables())
+    trainable_variables_g = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope = 'GeneratorScope')
+    trainable_variables_d = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope = 'DiscriminatorScope')
+
+    grad_and_var_d = optimizer.compute_gradients(loss_d, tf.trainable_variables())
+    grad_and_var_g = optimizer.comepute_gradients(loss)
     
-    # add histogram summary for gradient
-    for grad, var in grad_and_var:
+    # Add histogram summary for gradient
+    for grad, var in grad_and_var_d:
         tf.summary.histogram(var.name + '/gradient', grad)
+    for grad, var in grad_and_var_g:
+        tf.summary.histogram(var.name + '/gradient', grad)
+
     train_op = optimizer.apply_gradients(grad_and_var, global_step = tf.train.get_global_step())
     
     return tf.estimator.EstimatorSpec(

@@ -26,38 +26,32 @@ def main(unused):
     nn = tf.estimator.Estimator(model_fn=model.attn_net, config = config, params=model_params)
     
     # load training data
-    train_data = np.load(FLAGS.train_data)
-    train_label = np.load(FLAGS.train_label)
+    mnist = tf.contrib.learn.datasets.load_dataset('mnist')
+    train_data = mnist.train.images
+    train_label = mnist.train.labels
 
-    # load lexicon data
-    if FLAGS.lexicon_train is not None:
-        train_lexicon = np.load(FLAGS.lexicon_train)
-        dev_lexicon = np.load(FLAGS.lexicon_dev)
-        test_lexicon = np.load(FLAGS.lexicon_test)
 
     # data shuffling for training data
     permutation = np.random.permutation(len(train_label))
     train_data = train_data[permutation]
     train_label = train_label[permutation]
 
-    if FLAGS.lexicon_train is not None:
-        train_lexicon = train_lexicon[permutation]
 
     # training input function for estimator
     train_input_fn = tf.estimator.inputs.numpy_input_fn(
-        x={"x": train_data, 'lexicon': train_lexicon},
+        x={"x": train_data},
         y=train_label,
         batch_size = model_params['batch_size'],
         num_epochs=FLAGS.num_epochs,
         shuffle=True)
     
     # load evaluation data
-    eval_data = np.load(FLAGS.eval_data)
-    eval_label = np.load(FLAGS.eval_label)
+    eval_data = mnist.validation.images
+    eval_label = mnist.validation.labels
     
     # evaluation input function for estimator
     eval_input_fn = tf.estimator.inputs.numpy_input_fn(
-        x = {"x": eval_data, 'lexicon': dev_lexicon},
+        x = {"x": eval_data},
         y = eval_label,
         num_epochs=1,
         shuffle=False)  
@@ -79,11 +73,11 @@ def main(unused):
 
     else: # 'pred'
         # load preprocessed prediction data
-        pred_data = np.load(FLAGS.test_data)
+        pred_data = mnist.text.images
 
         # prediction input function for estimator
         pred_input_fn = tf.estimator.inputs.numpy_input_fn(
-                x = {"x" : pred_data, 'lexicon': test_lexicon},
+                x = {"x" : pred_data},
                 shuffle = False
                 )
 
@@ -105,9 +99,6 @@ if __name__ == '__main__':
     parser.add_argument('--eval_label', type = str, default = '', help = 'path to the evaluation label.')
     parser.add_argument('--test_data', type = str, default = '', help = 'path to the test data')
     parser.add_argument('--test_origin', type = str, default = '')
-    parser.add_argument('--lexicon_train', type = str, help = 'path to lexicon data')
-    parser.add_argument('--lexicon_dev', type = str, help = 'path to the lexicon data')
-    parser.add_argument('--lexicon_test', type = str, help = 'path to the lexicon data')
     parser.add_argument('--model_dir', type = str, help = 'path to save the model')
     parser.add_argument('--pred_dir', type = str, help = 'path to save the predictions')
     parser.add_argument('--prob_dir', type = str, default = 'None', help = 'path to save the predicted probability')
